@@ -1,4 +1,5 @@
-"""GroupChat ワークフロー — AnalystAgent と CriticAgent が RoundRobin で討議する。"""
+"""GroupChat ワークフロー — FacilitatorAgent が議長を務め、CeoAgent / AnalystAgent /
+CriticAgent の 3 エージェントが討議する。"""
 
 from __future__ import annotations
 
@@ -15,7 +16,9 @@ from agent_framework_orchestrations import (
 )
 
 from agents.analyst_agent import create_analyst_agent
+from agents.ceo_agent import create_ceo_agent
 from agents.critic_agent import create_critic_agent
+from agents.facilitator_agent import create_facilitator_agent
 
 
 # ---------------------------------------------------------------------------
@@ -40,17 +43,30 @@ class GroupChatResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# RoundRobin 選択関数
+# ファシリテーター制御の選択関数
 # ---------------------------------------------------------------------------
 
-_PARTICIPANTS = ["AnalystAgent", "CriticAgent"]
+_FACILITATOR = "FacilitatorAgent"
+_DEBATERS = ["CeoAgent", "AnalystAgent", "CriticAgent"]
+_ALL_PARTICIPANTS = [_FACILITATOR] + _DEBATERS
 _TURN_TIMEOUT_SECONDS = 30
 
 
-def _round_robin(state: GroupChatState) -> str:
-    """参加者を交互に選択する RoundRobin 関数。"""
-    # current_round は 0-indexed; 偶数 → Analyst, 奇数 → Critic
-    return _PARTICIPANTS[state.current_round % len(_PARTICIPANTS)]
+def _make_facilitator_selection(max_rounds: int) -> Callable[[GroupChatState], str]:
+    """ファシリテーターが開閉を担い、討論者が循環発言する選択関数を生成する。
+
+    - Round 0（1 ターン目）: FacilitatorAgent（討議開始・テーマ紹介）
+    - Rounds 1〜max_rounds-2: CeoAgent → AnalystAgent → CriticAgent の順で循環
+    - Round max_rounds-1（最終ターン）: FacilitatorAgent（討議終了・サマリー）
+    """
+    def _select(state: GroupChatState) -> str:
+        round_idx = state.current_round
+        if round_idx == 0 or round_idx == max_rounds - 1:
+            return _FACILITATOR
+        debater_idx = (round_idx - 1) % len(_DEBATERS)
+        return _DEBATERS[debater_idx]
+
+    return _select
 
 
 # ---------------------------------------------------------------------------
@@ -67,26 +83,28 @@ OnAgentMessage = Callable[[AgentMessage], None]
 
 async def run_groupchat(
     topic: str,
-    max_rounds: int = 6,
+    max_rounds: int = 9,
     on_message: OnAgentMessage | None = None,
 ) -> GroupChatResult:
     """GroupChat を実行し、結果を返す。
 
     Args:
         topic: 討議テーマ（文字列）
-        max_rounds: 最大ラウンド数（デフォルト 6）
+        max_rounds: 最大ラウンド数（デフォルト 9）
         on_message: 各発言ごとに呼ばれるコールバック（リアルタイム表示用）
     """
     if max_rounds <= 0:
         raise ValueError("max_rounds は 1 以上の整数を指定してください")
 
+    facilitator = create_facilitator_agent()
+    ceo = create_ceo_agent()
     analyst = create_analyst_agent()
     critic = create_critic_agent()
 
     workflow = (
         GroupChatBuilder(
-            participants=[analyst, critic],
-            selection_func=_round_robin,
+            participants=[facilitator, ceo, analyst, critic],
+            selection_func=_make_facilitator_selection(max_rounds),
             max_rounds=max_rounds,
             intermediate_outputs=True,
         )
@@ -107,7 +125,7 @@ async def run_groupchat(
         async def _consume() -> None:
             nonlocal round_counter
             async for event in stream:
-                if event.type == "output" and event.executor_id in _PARTICIPANTS:
+                if event.type == "output" and event.executor_id in _ALL_PARTICIPANTS:
                     # AgentResponseUpdate のテキストチャンクを蓄積
                     text = getattr(event.data, "text", "")
                     if text:
@@ -118,7 +136,7 @@ async def run_groupchat(
                 ):
                     # エージェントの発言完了 — 蓄積テキストからメッセージを構築
                     name = event.data.participant_name
-                    if name not in _PARTICIPANTS:
+                    if name not in _ALL_PARTICIPANTS:
                         continue
                     full_text = "".join(text_buffer.pop(name, []))
                     round_counter += 1
@@ -143,7 +161,7 @@ async def run_groupchat(
             for msg_data in output_history or []:
                 if msg_data.role != "assistant" or not msg_data.author_name:
                     continue
-                if msg_data.author_name not in _PARTICIPANTS:
+                if msg_data.author_name not in _ALL_PARTICIPANTS:
                     continue
                 round_counter += 1
                 am = AgentMessage(
@@ -163,7 +181,14 @@ async def run_groupchat(
         raise RuntimeError(f"GroupChat 実行中にエラーが発生しました: {exc}") from exc
     elapsed = time.perf_counter() - start
 
-    summary = agent_messages[-1].content if agent_messages else ""
+    # FacilitatorAgent の最終発言をサマリーとして使用（なければ最終メッセージ、それも無ければ空文字）
+    facilitator_msgs = [m for m in agent_messages if m.agent_name == _FACILITATOR]
+    if facilitator_msgs:
+        summary = facilitator_msgs[-1].content
+    elif agent_messages:
+        summary = agent_messages[-1].content
+    else:
+        summary = ""
 
     return GroupChatResult(
         messages=agent_messages,

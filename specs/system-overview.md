@@ -22,7 +22,7 @@ Microsoft Agent Framework の GroupChatOrchestration を最小構成で動作確
 - Human-in-the-loop
 
 ## 前提条件（セットアップ）
-- エージェント（AnalystAgent / CriticAgent）は **事前に Foundry Agent Service へ登録** する
+- エージェント（FacilitatorAgent / CeoAgent / AnalystAgent / CriticAgent）は **事前に Foundry Agent Service へ登録** する
 - 登録にはセットアップスクリプトを使用する：`python src/setup_agents.py create`
 - 登録済みエージェントの確認：`python src/setup_agents.py list`
 - エージェントの削除（再登録時）：`python src/setup_agents.py delete`

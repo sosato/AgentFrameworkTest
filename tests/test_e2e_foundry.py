@@ -59,7 +59,7 @@ def step1_verify_foundry_agents() -> bool:
         credential=DefaultAzureCredential(),
     )
 
-    required = {"AnalystAgent", "CriticAgent"}
+    required = {"FacilitatorAgent", "CeoAgent", "AnalystAgent", "CriticAgent"}
     found = set()
 
     print(f"\n登録済みエージェント:")
@@ -92,12 +92,16 @@ async def step2_single_agent_test() -> bool:
     print("=" * 60)
 
     from agents.analyst_agent import create_analyst_agent
+    from agents.ceo_agent import create_ceo_agent
     from agents.critic_agent import create_critic_agent
+    from agents.facilitator_agent import create_facilitator_agent
 
     test_topic = "トヨタ自動車の ESG 評価について簡潔に一行で述べてください。"
     ok = True
 
     for name, create_fn in [
+        ("FacilitatorAgent", create_facilitator_agent),
+        ("CeoAgent", create_ceo_agent),
         ("AnalystAgent", create_analyst_agent),
         ("CriticAgent", create_critic_agent),
     ]:

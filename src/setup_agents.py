@@ -1,9 +1,9 @@
 """Foundry Agent Service にエージェントを事前登録するセットアップスクリプト。
 
 使い方:
-    python setup_agents.py create   -- 両エージェントを登録（既存なら新バージョン作成）
+    python setup_agents.py create   -- 全エージェントを登録（既存なら新バージョン作成）
     python setup_agents.py list     -- 登録済みエージェント一覧を表示
-    python setup_agents.py delete   -- 両エージェントを削除
+    python setup_agents.py delete   -- 全エージェントを削除
 """
 
 from __future__ import annotations
@@ -48,9 +48,21 @@ def _get_agent_definitions() -> list[dict]:
     定義の一元管理を維持する。
     """
     from agents.analyst_agent import ANALYST_INSTRUCTIONS, ANALYST_NAME
+    from agents.ceo_agent import CEO_INSTRUCTIONS, CEO_NAME
     from agents.critic_agent import CRITIC_INSTRUCTIONS, CRITIC_NAME
+    from agents.facilitator_agent import FACILITATOR_INSTRUCTIONS, FACILITATOR_NAME
 
     return [
+        {
+            "name": FACILITATOR_NAME,
+            "description": "討論の議長として討議の開始・進行・まとめを担うファシリテーター",
+            "instructions": FACILITATOR_INSTRUCTIONS,
+        },
+        {
+            "name": CEO_NAME,
+            "description": "討議テーマの対象企業を代弁し、経営者の視点で ESG を主張する CEO",
+            "instructions": CEO_INSTRUCTIONS,
+        },
         {
             "name": ANALYST_NAME,
             "description": "ESG テーマを肯定的・建設的な視点から評価するアナリスト",
@@ -65,7 +77,7 @@ def _get_agent_definitions() -> list[dict]:
 
 
 def cmd_create() -> None:
-    """両エージェントを Foundry Agent Service に登録する。"""
+    """全エージェントを Foundry Agent Service に登録する。"""
     from azure.ai.projects.models import PromptAgentDefinition
 
     client = _get_project_client()
@@ -106,7 +118,7 @@ def cmd_list() -> None:
 
 
 def cmd_delete() -> None:
-    """両エージェントを Foundry から削除する。"""
+    """全エージェントを Foundry から削除する。"""
     client = _get_project_client()
     agent_defs = _get_agent_definitions()
 
