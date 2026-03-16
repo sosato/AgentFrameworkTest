@@ -2,7 +2,7 @@
 
 ## 目的
 Microsoft Agent Framework の GroupChatOrchestration を最小構成で動作確認する。
-2 つのエージェント（AnalystAgent と CriticAgent）が ESG テーマで討議し、
+1つのファシリテーターエージェントが議長役となり、企業を代弁する 1つのエージェント (CeoAgent)と外部からの指摘役として 2 つのエージェント（AnalystAgent と CriticAgent）が 企業経営に関するテーマで討議し、
 その過程と結論をコンソールに表示する。
 
 ## ユーザーインプット
