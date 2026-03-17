@@ -175,6 +175,12 @@ async def run_groupchat(
         topic: 討議テーマ（文字列）
         max_rounds: 最大ラウンド数（デフォルト _DEFAULT_MAX_ROUNDS、最小 _MIN_ROUNDS）
         on_message: 各発言ごとに呼ばれるコールバック（リアルタイム表示用）
+
+    Raises:
+        ValueError: max_rounds が _MIN_ROUNDS 未満の場合
+        RuntimeError: 最大リトライ回数を超えてもエラーが解消されなかった場合。
+            TimeoutError の場合はタイムアウト詳細、ConnectionError/OSError の場合は
+            通信エラー詳細を含むメッセージが設定される。
     """
     if max_rounds < _MIN_ROUNDS:
         raise ValueError(
@@ -240,6 +246,21 @@ async def _execute_groupchat(
 
     リトライ対象の例外（TimeoutError, ConnectionError, OSError）はそのまま送出し、
     呼び出し元の ``run_groupchat`` でリトライ制御を行う。
+
+    Args:
+        topic: 討議テーマ（文字列）
+        max_rounds: 最大ラウンド数
+        timeout_seconds: 全体のタイムアウト秒数
+        on_message: 各発言ごとに呼ばれるコールバック（リアルタイム表示用）
+
+    Returns:
+        GroupChatResult: GroupChat の実行結果
+
+    Raises:
+        TimeoutError: ストリーム消費がタイムアウトした場合（リトライ対象）
+        ConnectionError: 通信エラーが発生した場合（リトライ対象）
+        OSError: OS レベルの通信エラーが発生した場合（リトライ対象）
+        RuntimeError: 上記以外のエラーが発生した場合（リトライ対象外）
     """
     # ファシリテーターの動的発言者選択で参照するメッセージ履歴（選択関数と共有する参照）
     shared_message_history: list[AgentMessage] = []
