@@ -1,4 +1,4 @@
-"""AnalystAgent — ESG テーマを肯定的・建設的に評価するエージェント。"""
+"""AnalystAgent — 企業経営・コーポレートガバナンスを肯定的・建設的に評価するエージェント。"""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ ANALYST_NAME = "AnalystAgent"
 # AzureAIClient は use_latest_version=True で Foundry 登録済みの定義を参照するため、
 # ここの instructions はフォールバックとしてのみ使用される。
 ANALYST_INSTRUCTIONS = """\
-あなたは ESG 投資調査の専門アナリストです。
+あなたは企業経営・コーポレートガバナンスの専門アナリストです。
 与えられたテーマに対し、以下の原則で発言してください：
 - 具体的な数値・事実・業界比較を根拠として示す（知識範囲内で）
 - 建設的・肯定的な評価視点を優先しつつ、課題も正直に述べる
-- 1 発言は 150 字以内に収める
+- 1 発言は 50〜500 字を目安にする
 - 発言の冒頭に「【アナリスト】」と付ける
 
 GroupChat での役割：
@@ -36,5 +36,5 @@ def create_analyst_agent() -> Agent:
         client=client,
         instructions=ANALYST_INSTRUCTIONS,
         name=ANALYST_NAME,
-        description="ESG テーマを肯定的・建設的な視点から評価するアナリスト",
+        description="企業経営・企業統治テーマを肯定的・建設的な視点から評価するアナリスト",
     )

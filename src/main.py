@@ -1,4 +1,4 @@
-"""ESG GroupChat PoC — CLI エントリーポイント。"""
+"""企業統治 GroupChat PoC — CLI エントリーポイント。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 
 from workflows.groupchat import AgentMessage, GroupChatResult, run_groupchat
 
-DEFAULT_TOPIC = "トヨタ自動車の ESG 評価：環境への取り組みは十分か？"
+DEFAULT_TOPIC = "トヨタ自動車のコーポレートガバナンス：取締役会の独立性は十分か？"
 
 # ANSI カラーコード
 _BLUE = "\033[94m"
@@ -78,7 +78,7 @@ def _print_agent_message(msg: AgentMessage) -> None:
 def display_summary(result: GroupChatResult) -> None:
     """GroupChat 完了後のサマリー（スコア比較・最終結論）を表示する。"""
     print("\n" + "=" * 60)
-    print(" ESG GroupChat PoC — 討議完了")
+    print(" 企業統治 GroupChat PoC — 討議完了")
     print("=" * 60)
     print(f"総ラウンド数 : {result.total_rounds}")
     print(f"所要時間     : {result.elapsed_seconds} 秒")
@@ -117,7 +117,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             raise argparse.ArgumentTypeError("1 以上の整数を指定してください")
         return ivalue
 
-    parser = argparse.ArgumentParser(description="ESG GroupChat PoC")
+    parser = argparse.ArgumentParser(description="企業統治 GroupChat PoC")
     parser.add_argument(
         "--topic",
         type=str,

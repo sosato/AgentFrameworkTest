@@ -60,17 +60,17 @@ def _get_agent_definitions() -> list[dict]:
         },
         {
             "name": CEO_NAME,
-            "description": "討議テーマの対象企業を代弁し、経営者の視点で ESG を主張する CEO",
+            "description": "討議テーマの対象企業を代弁し、経営者の視点で主張する CEO",
             "instructions": CEO_INSTRUCTIONS,
         },
         {
             "name": ANALYST_NAME,
-            "description": "ESG テーマを肯定的・建設的な視点から評価するアナリスト",
+            "description": "企業経営・企業統治テーマを肯定的・建設的な視点から評価するアナリスト",
             "instructions": ANALYST_INSTRUCTIONS,
         },
         {
             "name": CRITIC_NAME,
-            "description": "ESG テーマを批判的・懐疑的な視点から評価するクリティック",
+            "description": "企業経営・企業統治テーマを批判的・懐疑的な視点から評価するクリティック",
             "instructions": CRITIC_INSTRUCTIONS,
         },
     ]
