@@ -4,10 +4,13 @@ CriticAgent の 3 エージェントが討議する。"""
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Callable
 
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 from agent_framework_orchestrations import (
     GroupChatBuilder,
@@ -49,7 +52,7 @@ class GroupChatResult(BaseModel):
 _FACILITATOR = "FacilitatorAgent"
 _DEBATERS = ["CeoAgent", "AnalystAgent", "CriticAgent"]
 _ALL_PARTICIPANTS = [_FACILITATOR] + _DEBATERS
-_TURN_TIMEOUT_SECONDS = 30
+_TURN_TIMEOUT_SECONDS = 120
 
 # ファシリテーターが次の発言者を指定するタグのプレフィックス
 # 例: 【次の発言者: CeoAgent】
@@ -58,6 +61,13 @@ _NEXT_SPEAKER_TAG = "【次の発言者:"
 # ラウンド数の制約
 _MIN_ROUNDS = 5
 _DEFAULT_MAX_ROUNDS = 13
+
+# リトライ設定
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY_SECONDS = 2.0
+
+# リトライ対象の例外型
+_RETRYABLE_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
 
 
 def _extract_next_speaker(content: str) -> str | None:
@@ -158,16 +168,100 @@ async def run_groupchat(
 ) -> GroupChatResult:
     """GroupChat を実行し、結果を返す。
 
+    通信不安定やタイムアウト等の一時的なエラーに対しては指数バックオフで
+    最大 ``_MAX_RETRIES`` 回までリトライする。
+
     Args:
         topic: 討議テーマ（文字列）
         max_rounds: 最大ラウンド数（デフォルト _DEFAULT_MAX_ROUNDS、最小 _MIN_ROUNDS）
         on_message: 各発言ごとに呼ばれるコールバック（リアルタイム表示用）
+
+    Raises:
+        ValueError: max_rounds が _MIN_ROUNDS 未満の場合
+        RuntimeError: 最大リトライ回数を超えてもエラーが解消されなかった場合。
+            TimeoutError の場合はタイムアウト詳細、ConnectionError/OSError の場合は
+            通信エラー詳細を含むメッセージが設定される。
     """
     if max_rounds < _MIN_ROUNDS:
         raise ValueError(
             f"max_rounds は {_MIN_ROUNDS} 以上の整数を指定してください"
         )
 
+    timeout_seconds = _TURN_TIMEOUT_SECONDS * max_rounds
+    last_exception: BaseException | None = None
+
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            return await _execute_groupchat(
+                topic=topic,
+                max_rounds=max_rounds,
+                timeout_seconds=timeout_seconds,
+                on_message=on_message,
+            )
+        except _RETRYABLE_EXCEPTIONS as exc:
+            last_exception = exc
+            if attempt < _MAX_RETRIES:
+                delay = _RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1))
+                logger.warning(
+                    "GroupChat 実行中に一時的なエラーが発生しました "
+                    "(試行 %d/%d, %.1f秒後にリトライ): [%s] %s",
+                    attempt,
+                    _MAX_RETRIES,
+                    delay,
+                    type(exc).__name__,
+                    exc,
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(
+                    "GroupChat の最大リトライ回数に到達しました "
+                    "(試行 %d/%d): [%s] %s",
+                    attempt,
+                    _MAX_RETRIES,
+                    type(exc).__name__,
+                    exc,
+                )
+
+    # リトライ上限を超えた場合
+    assert last_exception is not None
+    if isinstance(last_exception, TimeoutError):
+        raise RuntimeError(
+            f"GroupChat がタイムアウトしました "
+            f"（{_TURN_TIMEOUT_SECONDS}秒/ターン, 合計{timeout_seconds}秒, "
+            f"{_MAX_RETRIES}回リトライ済み）: [{type(last_exception).__name__}] {last_exception}"
+        ) from last_exception
+    raise RuntimeError(
+        f"GroupChat 実行中に通信エラーが発生しました "
+        f"（{_MAX_RETRIES}回リトライ済み）: [{type(last_exception).__name__}] {last_exception}"
+    ) from last_exception
+
+
+async def _execute_groupchat(
+    topic: str,
+    max_rounds: int,
+    timeout_seconds: float,
+    on_message: OnAgentMessage | None,
+) -> GroupChatResult:
+    """GroupChat の単一実行を行う内部関数。
+
+    リトライ対象の例外（TimeoutError, ConnectionError, OSError）はそのまま送出し、
+    呼び出し元の ``run_groupchat`` でリトライ制御を行う。
+
+    Args:
+        topic: 討議テーマ（文字列）
+        max_rounds: 最大ラウンド数
+        timeout_seconds: 全体のタイムアウト秒数
+        on_message: 各発言ごとに呼ばれるコールバック（リアルタイム表示用）
+
+    Returns:
+        GroupChatResult: GroupChat の実行結果
+
+    Raises:
+        TimeoutError: ストリーム消費がタイムアウトした場合（リトライ対象）
+        ConnectionError: 通信エラーが発生した場合（リトライ対象）
+        OSError: OS レベルの通信エラーが発生した場合（リトライ対象）
+        RuntimeError: 上記以外のエラーが発生した場合（リトライ対象外）
+    """
     # ファシリテーターの動的発言者選択で参照するメッセージ履歴（選択関数と共有する参照）
     shared_message_history: list[AgentMessage] = []
 
@@ -191,7 +285,6 @@ async def run_groupchat(
     round_counter = 0
 
     try:
-        timeout_seconds = _TURN_TIMEOUT_SECONDS * max_rounds
         stream = workflow.run(topic, stream=True)
 
         # エージェントごとにテキストトークンを蓄積するバッファ
@@ -252,12 +345,12 @@ async def run_groupchat(
                 if on_message:
                     on_message(am)
 
-    except TimeoutError as exc:
-        raise RuntimeError(
-            f"GroupChat がタイムアウトしました（{_TURN_TIMEOUT_SECONDS}秒/ターン, 合計{timeout_seconds}秒）"
-        ) from exc
+    except _RETRYABLE_EXCEPTIONS:
+        raise
     except Exception as exc:
-        raise RuntimeError(f"GroupChat 実行中にエラーが発生しました: {exc}") from exc
+        raise RuntimeError(
+            f"GroupChat 実行中にエラーが発生しました: [{type(exc).__name__}] {exc}"
+        ) from exc
     elapsed = time.perf_counter() - start
 
     # FacilitatorAgent の最終発言をサマリーとして使用（なければ最終メッセージ、それも無ければ空文字）
