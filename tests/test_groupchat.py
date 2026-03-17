@@ -14,21 +14,46 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from agent_framework import Message  # noqa: E402
 from agent_framework_orchestrations import GroupChatResponseReceivedEvent  # noqa: E402
 
-from workflows.groupchat import GroupChatResult, run_groupchat  # noqa: E402
+from workflows.groupchat import (  # noqa: E402
+    AgentMessage,
+    GroupChatResult,
+    _DEFAULT_MAX_ROUNDS,
+    _MIN_ROUNDS,
+    _extract_next_speaker,
+    _make_dynamic_selection,
+    run_groupchat,
+)
 
 # ---------------------------------------------------------------------------
-# 固定スタブデータ（9 ラウンド分）
+# 固定スタブデータ（13 ラウンド分 — ファシリテーターが偶数ターン、討論者が奇数ターン）
 # ---------------------------------------------------------------------------
 
 _STUB_ASSISTANT_MESSAGES = [
-    ("FacilitatorAgent", "【ファシリテーター】本日はトヨタ自動車の ESG 評価について討議します。CEO・アナリスト・クリティックの皆さん、よろしくお願いします。"),
+    # idx 0 (even): Facilitator opens + directs CEO
+    ("FacilitatorAgent", "【ファシリテーター】本日はトヨタ自動車の ESG 評価について討議します。CEO・アナリスト・クリティックの皆さん、よろしくお願いします。【次の発言者: CeoAgent】"),
+    # idx 1 (odd): CEO
     ("CeoAgent", "【CEO】当社は 2050 年カーボンニュートラルを目標に、EV シフトと再生エネ調達を加速しています。"),
+    # idx 2 (even): Facilitator intermediate + directs Analyst
+    ("FacilitatorAgent", "【ファシリテーター】CEO の見解を伺いました。次にアナリストからの評価をお願いします。【次の発言者: AnalystAgent】"),
+    # idx 3 (odd): Analyst
     ("AnalystAgent", "【アナリスト】初期評価スコア 7/10。環境対策は業界平均以上で方向性は評価できます。"),
+    # idx 4 (even): Facilitator intermediate + directs Critic
+    ("FacilitatorAgent", "【ファシリテーター】アナリストの評価を受け、クリティックからの反論をお願いします。【次の発言者: CriticAgent】"),
+    # idx 5 (odd): Critic
     ("CriticAgent", "【クリティック】反論評価スコア 5/10。Scope3 排出量の開示が不十分で信頼性に疑問。"),
+    # idx 6 (even): Facilitator intermediate + directs CEO
+    ("FacilitatorAgent", "【ファシリテーター】クリティックの指摘を受け、CEOからの応答をお願いします。【次の発言者: CeoAgent】"),
+    # idx 7 (odd): CEO
     ("CeoAgent", "【CEO】Scope3 については来期の報告書で詳細開示を予定しています。"),
+    # idx 8 (even): Facilitator intermediate + directs Analyst
+    ("FacilitatorAgent", "【ファシリテーター】CEO の応答を受けて、アナリストの評価を改めてお願いします。【次の発言者: AnalystAgent】"),
+    # idx 9 (odd): Analyst
     ("AnalystAgent", "【アナリスト】CO2 削減実績は第三者検証済み。開示改善を前提に 8/10 に上方修正。"),
+    # idx 10 (even): Facilitator intermediate + directs Critic
+    ("FacilitatorAgent", "【ファシリテーター】アナリストの評価が変わりました。クリティックの最終見解をお願いします。【次の発言者: CriticAgent】"),
+    # idx 11 (odd): Critic
     ("CriticAgent", "【クリティック】改善姿勢は認めつつ 6/10。サプライチェーン全体の取り組みが課題。"),
-    ("CeoAgent", "【CEO】サプライヤーへの ESG 要求基準を強化し、2026 年までに全取引先に展開予定です。"),
+    # idx 12 (even, last): Facilitator closes
     ("FacilitatorAgent", "【ファシリテーター】討議を終了します。CEO は具体的施策を提示、アナリスト・クリティックは開示充実と SC 対応を課題として指摘しました。"),
 ]
 
@@ -55,7 +80,7 @@ def _make_group_chat_response_event(participant_name: str, round_index: int) -> 
 
 
 def _build_stream_events() -> list[MagicMock]:
-    """9 ラウンド分のストリームイベント列を構築する。"""
+    """13 ラウンド分のストリームイベント列を構築する。"""
     events: list[MagicMock] = []
     for i, (agent_name, text) in enumerate(_STUB_ASSISTANT_MESSAGES):
         events.append(_make_output_event(agent_name, text))
@@ -136,7 +161,7 @@ async def test_groupchat_returns_result(
     mock_create_critic.return_value = MagicMock()
     mock_builder_cls.return_value.build.return_value = _make_mock_workflow()
 
-    result = await run_groupchat(topic="テスト", max_rounds=9)
+    result = await run_groupchat(topic="テスト", max_rounds=_DEFAULT_MAX_ROUNDS)
 
     assert isinstance(result, GroupChatResult)
     assert result.summary != ""
@@ -162,7 +187,7 @@ async def test_groupchat_message_count(
     mock_create_critic.return_value = MagicMock()
     mock_builder_cls.return_value.build.return_value = _make_mock_workflow()
 
-    max_rounds = 9
+    max_rounds = _DEFAULT_MAX_ROUNDS
     result = await run_groupchat(topic="テスト", max_rounds=max_rounds)
 
     assert len(result.messages) == max_rounds
@@ -189,7 +214,7 @@ async def test_groupchat_agent_names(
     mock_create_critic.return_value = MagicMock()
     mock_builder_cls.return_value.build.return_value = _make_mock_workflow()
 
-    result = await run_groupchat(topic="テスト", max_rounds=9)
+    result = await run_groupchat(topic="テスト", max_rounds=_DEFAULT_MAX_ROUNDS)
 
     agent_names = {msg.agent_name for msg in result.messages}
     assert "FacilitatorAgent" in agent_names
@@ -218,7 +243,7 @@ async def test_groupchat_elapsed_time(
     mock_create_critic.return_value = MagicMock()
     mock_builder_cls.return_value.build.return_value = _make_mock_workflow()
 
-    result = await run_groupchat(topic="テスト", max_rounds=9)
+    result = await run_groupchat(topic="テスト", max_rounds=_DEFAULT_MAX_ROUNDS)
 
     assert result.elapsed_seconds >= 0
 
@@ -245,10 +270,10 @@ async def test_groupchat_fallback_extracts_from_final_response(
         _make_mock_workflow_fallback()
     )
 
-    result = await run_groupchat(topic="テスト", max_rounds=9)
+    result = await run_groupchat(topic="テスト", max_rounds=_DEFAULT_MAX_ROUNDS)
 
-    assert len(result.messages) == 9
-    assert result.total_rounds == 9
+    assert len(result.messages) == _DEFAULT_MAX_ROUNDS
+    assert result.total_rounds == _DEFAULT_MAX_ROUNDS
 
 
 @pytest.mark.asyncio
@@ -273,14 +298,15 @@ async def test_groupchat_on_message_callback(
 
     received: list = []
     result = await run_groupchat(
-        topic="テスト", max_rounds=9, on_message=lambda msg: received.append(msg)
+        topic="テスト", max_rounds=_DEFAULT_MAX_ROUNDS, on_message=lambda msg: received.append(msg)
     )
 
-    assert len(received) == 9
+    assert len(received) == _DEFAULT_MAX_ROUNDS
+    # 新しいパターン: ファシリテーターが偶数ラウンド、討論者が奇数ラウンド
     assert received[0].agent_name == "FacilitatorAgent"
     assert received[1].agent_name == "CeoAgent"
-    assert received[2].agent_name == "AnalystAgent"
-    assert received[3].agent_name == "CriticAgent"
+    assert received[2].agent_name == "FacilitatorAgent"
+    assert received[3].agent_name == "AnalystAgent"
 
 
 @pytest.mark.asyncio
@@ -303,16 +329,64 @@ async def test_groupchat_summary_from_facilitator(
     mock_create_critic.return_value = MagicMock()
     mock_builder_cls.return_value.build.return_value = _make_mock_workflow()
 
-    result = await run_groupchat(topic="テスト", max_rounds=9)
+    result = await run_groupchat(topic="テスト", max_rounds=_DEFAULT_MAX_ROUNDS)
 
     assert result.summary.startswith("【ファシリテーター】")
 
 
 @pytest.mark.asyncio
+async def test_groupchat_rejects_below_min_rounds() -> None:
+    """max_rounds < _MIN_ROUNDS は ValueError で拒否されること。"""
+    with pytest.raises(ValueError, match=f"{_MIN_ROUNDS} 以上"):
+        await run_groupchat(topic="テスト", max_rounds=_MIN_ROUNDS - 1)
+
+
+@pytest.mark.asyncio
 async def test_groupchat_rejects_non_positive_rounds() -> None:
     """max_rounds <= 0 は ValueError で拒否されること。"""
-    with pytest.raises(ValueError, match="1 以上"):
+    with pytest.raises(ValueError, match=f"{_MIN_ROUNDS} 以上"):
         await run_groupchat(topic="テスト", max_rounds=0)
+
+
+@pytest.mark.asyncio
+@patch("workflows.groupchat.create_critic_agent")
+@patch("workflows.groupchat.create_analyst_agent")
+@patch("workflows.groupchat.create_ceo_agent")
+@patch("workflows.groupchat.create_facilitator_agent")
+@patch("workflows.groupchat.GroupChatBuilder")
+async def test_groupchat_accepts_min_rounds(
+    mock_builder_cls: MagicMock,
+    mock_create_facilitator: MagicMock,
+    mock_create_ceo: MagicMock,
+    mock_create_analyst: MagicMock,
+    mock_create_critic: MagicMock,
+) -> None:
+    """max_rounds == _MIN_ROUNDS は正常に受け付けられること。"""
+    min_messages = [
+        ("FacilitatorAgent", "【ファシリテーター】討議を開始します。【次の発言者: CeoAgent】"),
+        ("CeoAgent", "【CEO】ESG 施策について説明します。"),
+        ("FacilitatorAgent", "【ファシリテーター】ありがとうございます。【次の発言者: AnalystAgent】"),
+        ("AnalystAgent", "【アナリスト】評価スコア 7/10。"),
+        ("FacilitatorAgent", "【ファシリテーター】討議を終了します。"),
+    ]
+    events: list[MagicMock] = []
+    for i, (agent_name, text) in enumerate(min_messages):
+        events.append(_make_output_event(agent_name, text))
+        events.append(_make_group_chat_response_event(agent_name, i))
+    stream = _MockStream(events)
+    mock_workflow = MagicMock()
+    mock_workflow.run = MagicMock(return_value=stream)
+
+    mock_create_facilitator.return_value = MagicMock()
+    mock_create_ceo.return_value = MagicMock()
+    mock_create_analyst.return_value = MagicMock()
+    mock_create_critic.return_value = MagicMock()
+    mock_builder_cls.return_value.build.return_value = mock_workflow
+
+    result = await run_groupchat(topic="テスト", max_rounds=_MIN_ROUNDS)
+
+    assert isinstance(result, GroupChatResult)
+    assert result.total_rounds == _MIN_ROUNDS
 
 
 @pytest.mark.asyncio
@@ -329,11 +403,13 @@ async def test_groupchat_summary_fallback_without_facilitator(
     mock_create_critic: MagicMock,
 ) -> None:
     """FacilitatorAgent の発言がない場合、最終発言がサマリーに使われること。"""
-    # FacilitatorAgent を含まない 3 メッセージのみのストリームを作成
+    # FacilitatorAgent を含まない 5 メッセージのみのストリームを作成（_MIN_ROUNDS = 5）
     non_facilitator_messages = [
         ("CeoAgent", "【CEO】ESG 取り組みを積極推進中。"),
         ("AnalystAgent", "【アナリスト】評価スコア 7/10。"),
         ("CriticAgent", "【クリティック】課題が残る 5/10。"),
+        ("CeoAgent", "【CEO】来期の取り組み詳細を説明します。"),
+        ("AnalystAgent", "【アナリスト】評価スコア 8/10 に上方修正。"),
     ]
     events: list[MagicMock] = []
     for i, (agent_name, text) in enumerate(non_facilitator_messages):
@@ -349,8 +425,103 @@ async def test_groupchat_summary_fallback_without_facilitator(
     mock_create_critic.return_value = MagicMock()
     mock_builder_cls.return_value.build.return_value = workflow
 
-    result = await run_groupchat(topic="テスト", max_rounds=3)
+    result = await run_groupchat(topic="テスト", max_rounds=_MIN_ROUNDS)
 
     # FacilitatorAgent がいないので最終メッセージがサマリーになること
     assert result.summary == non_facilitator_messages[-1][1]
+
+
+# ---------------------------------------------------------------------------
+# 動的発言者選択ユニットテスト
+# ---------------------------------------------------------------------------
+
+
+def test_extract_next_speaker_returns_correct_agent() -> None:
+    """【次の発言者: XXXAgent】ディレクティブから正しいエージェント名を抽出できること。"""
+    assert _extract_next_speaker("内容です。【次の発言者: CeoAgent】") == "CeoAgent"
+    assert _extract_next_speaker("内容です。【次の発言者: AnalystAgent】") == "AnalystAgent"
+    assert _extract_next_speaker("内容です。【次の発言者: CriticAgent】") == "CriticAgent"
+
+
+def test_extract_next_speaker_returns_none_when_no_directive() -> None:
+    """ディレクティブがない場合 None を返すこと。"""
+    assert _extract_next_speaker("ファシリテーターの通常の発言。") is None
+    assert _extract_next_speaker("") is None
+
+
+def test_dynamic_selection_facilitator_on_even_rounds() -> None:
+    """偶数ラウンドはファシリテーターが選択されること。"""
+    history: list[AgentMessage] = []
+    select = _make_dynamic_selection(max_rounds=13, message_history=history)
+
+    for round_idx in [0, 2, 4, 6, 8, 10, 12]:
+        state = MagicMock()
+        state.current_round = round_idx
+        assert select(state) == "FacilitatorAgent", f"round_idx={round_idx} should be FacilitatorAgent"
+
+
+def test_dynamic_selection_fallback_round_robin_on_odd_rounds() -> None:
+    """ディレクティブがない場合、奇数ラウンドはラウンドロビンフォールバックが動作すること。"""
+    history: list[AgentMessage] = []
+    select = _make_dynamic_selection(max_rounds=13, message_history=history)
+
+    # フォールバック: debater_turn = (round_idx - 1) // 2
+    # round 1: debater_turn=0 → CeoAgent
+    # round 3: debater_turn=1 → AnalystAgent
+    # round 5: debater_turn=2 → CriticAgent
+    # round 7: debater_turn=3 → CeoAgent (循環)
+    expected = {1: "CeoAgent", 3: "AnalystAgent", 5: "CriticAgent", 7: "CeoAgent"}
+    for round_idx, expected_agent in expected.items():
+        state = MagicMock()
+        state.current_round = round_idx
+        assert select(state) == expected_agent, f"round_idx={round_idx} should be {expected_agent}"
+
+
+def test_dynamic_selection_uses_directive_from_message_history() -> None:
+    """message_history にファシリテーターのディレクティブがある場合、それに従って討論者を選択すること。"""
+    history: list[AgentMessage] = [
+        AgentMessage(
+            agent_name="FacilitatorAgent",
+            content="CEOの見解を受けて、アナリストにお願いします。【次の発言者: AnalystAgent】",
+            round_num=1,
+        )
+    ]
+    select = _make_dynamic_selection(max_rounds=13, message_history=history)
+
+    state = MagicMock()
+    state.current_round = 3  # 奇数ラウンド → 討論者が発言
+    assert select(state) == "AnalystAgent"
+
+
+def test_dynamic_selection_uses_directive_from_state_messages() -> None:
+    """GroupChatState.messages にファシリテーターのディレクティブがある場合、それに従って討論者を選択すること。"""
+    history: list[AgentMessage] = []
+    select = _make_dynamic_selection(max_rounds=13, message_history=history)
+
+    # state.messages にファシリテーターの発言を含める
+    mock_state_msg = MagicMock()
+    mock_state_msg.agent_name = "FacilitatorAgent"
+    mock_state_msg.content = "クリティックにお願いします。【次の発言者: CriticAgent】"
+
+    state = MagicMock()
+    state.current_round = 5
+    state.messages = [mock_state_msg]
+
+    assert select(state) == "CriticAgent"
+
+
+def test_dynamic_selection_last_round_always_facilitator() -> None:
+    """最終ラウンドは常にファシリテーターが選択されること。"""
+    history: list[AgentMessage] = [
+        AgentMessage(
+            agent_name="FacilitatorAgent",
+            content="【次の発言者: CeoAgent】",
+            round_num=1,
+        )
+    ]
+    select = _make_dynamic_selection(max_rounds=13, message_history=history)
+
+    state = MagicMock()
+    state.current_round = 12  # max_rounds - 1 = 12
+    assert select(state) == "FacilitatorAgent"
 

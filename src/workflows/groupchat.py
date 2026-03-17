@@ -43,7 +43,7 @@ class GroupChatResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# ファシリテーター制御の選択関数
+# ファシリテーター制御の選択関数（動的発言者割り当て）
 # ---------------------------------------------------------------------------
 
 _FACILITATOR = "FacilitatorAgent"
@@ -51,20 +51,90 @@ _DEBATERS = ["CeoAgent", "AnalystAgent", "CriticAgent"]
 _ALL_PARTICIPANTS = [_FACILITATOR] + _DEBATERS
 _TURN_TIMEOUT_SECONDS = 30
 
+# ファシリテーターが次の発言者を指定するタグのプレフィックス
+# 例: 【次の発言者: CeoAgent】
+_NEXT_SPEAKER_TAG = "【次の発言者:"
 
-def _make_facilitator_selection(max_rounds: int) -> Callable[[GroupChatState], str]:
-    """ファシリテーターが開閉を担い、討論者が循環発言する選択関数を生成する。
+# ラウンド数の制約
+_MIN_ROUNDS = 5
+_DEFAULT_MAX_ROUNDS = 13
 
-    - Round 0（1 ターン目）: FacilitatorAgent（討議開始・テーマ紹介）
-    - Rounds 1〜max_rounds-2: CeoAgent → AnalystAgent → CriticAgent の順で循環
-    - Round max_rounds-1（最終ターン）: FacilitatorAgent（討議終了・サマリー）
+
+def _extract_next_speaker(content: str) -> str | None:
+    """ファシリテーターの発言から次の発言者ディレクティブを抽出する。
+
+    Args:
+        content: ファシリテーターの発言テキスト
+
+    Returns:
+        発言者エージェント名（_DEBATERS に含まれる場合）、見つからなければ None
+    """
+    for debater in _DEBATERS:
+        if f"{_NEXT_SPEAKER_TAG} {debater}】" in content:
+            return debater
+    return None
+
+
+def _make_dynamic_selection(
+    max_rounds: int,
+    message_history: list[AgentMessage],
+) -> Callable[[GroupChatState], str]:
+    """ファシリテーターが各討論者の発言後にコメントし、次の発言者を動的に選択する選択関数を生成する。
+
+    ターン構造：
+    - Round 0（偶数）: FacilitatorAgent（討議開始・テーマ紹介 + 最初の発言者指定）
+    - Round 1, 3, 5, ...（奇数）: 討論者（ファシリテーターのディレクティブで動的に選択）
+    - Round 2, 4, 6, ...（偶数・中間）: FacilitatorAgent（コメント + 次の発言者指定）
+    - Round max_rounds-1（最終ターン・偶数）: FacilitatorAgent（討議終了・サマリー）
+
+    動的選択ロジック：
+    1. GroupChatState.messages（利用可能な場合）またはローカルの message_history から
+       ファシリテーターの最新発言を取得する
+    2. 発言中の「【次の発言者: XXXAgent】」ディレクティブを解析して次の発言者を決定する
+    3. ディレクティブが見つからない場合はラウンドインデックスに基づくラウンドロビンにフォールバックする
+
+    Args:
+        max_rounds: 最大ラウンド数
+        message_history: 蓄積された AgentMessage のリスト（run_groupchat と共有する参照）
+
+    Returns:
+        GroupChatState を受け取り、次の発言者名を返す選択関数
     """
     def _select(state: GroupChatState) -> str:
         round_idx = state.current_round
+
+        # 最初と最後のラウンドはファシリテーター
         if round_idx == 0 or round_idx == max_rounds - 1:
             return _FACILITATOR
-        debater_idx = (round_idx - 1) % len(_DEBATERS)
-        return _DEBATERS[debater_idx]
+
+        # 偶数ラウンド（中間）: ファシリテーターがコメントし次の発言者を指定
+        if round_idx % 2 == 0:
+            return _FACILITATOR
+
+        # 奇数ラウンド: ファシリテーターのディレクティブから次の討論者を動的に選択
+        # GroupChatState.messages が利用可能な場合はそちらを優先して参照
+        state_messages = getattr(state, "messages", None) or []
+
+        for msg in reversed(list(state_messages)):
+            name = getattr(msg, "agent_name", None) or getattr(msg, "author_name", None)
+            content = getattr(msg, "content", None) or getattr(msg, "text", "") or ""
+            if name == _FACILITATOR:
+                speaker = _extract_next_speaker(content)
+                if speaker:
+                    return speaker
+
+        # ローカルの message_history（run_groupchat と共有）からファシリテーターの最新発言を参照
+        for msg in reversed(message_history):
+            if msg.agent_name == _FACILITATOR:
+                speaker = _extract_next_speaker(msg.content)
+                if speaker:
+                    return speaker
+
+        # フォールバック: ラウンドインデックスに基づくラウンドロビン
+        # 奇数ラウンド 1,3,5,7,... に対して debater_turn は 0,1,2,3,... となり
+        # _DEBATERS リストをインデックスでサイクルする（0→CEO, 1→Analyst, 2→Critic, 3→CEO...）
+        debater_turn = (round_idx - 1) // 2
+        return _DEBATERS[debater_turn % len(_DEBATERS)]
 
     return _select
 
@@ -83,18 +153,23 @@ OnAgentMessage = Callable[[AgentMessage], None]
 
 async def run_groupchat(
     topic: str,
-    max_rounds: int = 9,
+    max_rounds: int = _DEFAULT_MAX_ROUNDS,
     on_message: OnAgentMessage | None = None,
 ) -> GroupChatResult:
     """GroupChat を実行し、結果を返す。
 
     Args:
         topic: 討議テーマ（文字列）
-        max_rounds: 最大ラウンド数（デフォルト 9）
+        max_rounds: 最大ラウンド数（デフォルト _DEFAULT_MAX_ROUNDS、最小 _MIN_ROUNDS）
         on_message: 各発言ごとに呼ばれるコールバック（リアルタイム表示用）
     """
-    if max_rounds <= 0:
-        raise ValueError("max_rounds は 1 以上の整数を指定してください")
+    if max_rounds < _MIN_ROUNDS:
+        raise ValueError(
+            f"max_rounds は {_MIN_ROUNDS} 以上の整数を指定してください"
+        )
+
+    # ファシリテーターの動的発言者選択で参照するメッセージ履歴（選択関数と共有する参照）
+    shared_message_history: list[AgentMessage] = []
 
     facilitator = create_facilitator_agent()
     ceo = create_ceo_agent()
@@ -104,7 +179,7 @@ async def run_groupchat(
     workflow = (
         GroupChatBuilder(
             participants=[facilitator, ceo, analyst, critic],
-            selection_func=_make_facilitator_selection(max_rounds),
+            selection_func=_make_dynamic_selection(max_rounds, shared_message_history),
             max_rounds=max_rounds,
             intermediate_outputs=True,
         )
@@ -146,6 +221,8 @@ async def run_groupchat(
                         round_num=round_counter,
                     )
                     agent_messages.append(msg)
+                    # 動的発言者選択で参照できるよう共有リストにも追加する
+                    shared_message_history.append(msg)
                     if on_message:
                         on_message(msg)
 
@@ -170,6 +247,8 @@ async def run_groupchat(
                     round_num=round_counter,
                 )
                 agent_messages.append(am)
+                # 動的発言者選択で参照できるよう共有リストにも追加する
+                shared_message_history.append(am)
                 if on_message:
                     on_message(am)
 

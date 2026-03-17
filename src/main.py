@@ -15,6 +15,7 @@ logging.getLogger("agent_framework.azure").setLevel(logging.ERROR)
 logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 
 from workflows.groupchat import AgentMessage, GroupChatResult, run_groupchat
+from workflows.groupchat import _DEFAULT_MAX_ROUNDS, _MIN_ROUNDS
 
 DEFAULT_TOPIC = "トヨタ自動車のコーポレートガバナンス：取締役会の独立性は十分か？"
 
@@ -111,10 +112,12 @@ async def main(topic: str, max_rounds: int) -> None:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    def _positive_int(value: str) -> int:
+    def _min_rounds_int(value: str) -> int:
         ivalue = int(value)
-        if ivalue <= 0:
-            raise argparse.ArgumentTypeError("1 以上の整数を指定してください")
+        if ivalue < _MIN_ROUNDS:
+            raise argparse.ArgumentTypeError(
+                f"{_MIN_ROUNDS} 以上の整数を指定してください"
+            )
         return ivalue
 
     parser = argparse.ArgumentParser(description="企業統治 GroupChat PoC")
@@ -126,9 +129,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--rounds",
-        type=_positive_int,
-        default=9,
-        help="最大ラウンド数（省略時 9）",
+        type=_min_rounds_int,
+        default=_DEFAULT_MAX_ROUNDS,
+        help=f"最大ラウンド数（最小 {_MIN_ROUNDS}、省略時 {_DEFAULT_MAX_ROUNDS}）",
     )
     return parser.parse_args(argv)
 
