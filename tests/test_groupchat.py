@@ -18,7 +18,10 @@ from workflows.groupchat import (  # noqa: E402
     AgentMessage,
     GroupChatResult,
     _DEFAULT_MAX_ROUNDS,
+    _MAX_RETRIES,
     _MIN_ROUNDS,
+    _RETRYABLE_EXCEPTIONS,
+    _TURN_TIMEOUT_SECONDS,
     _extract_next_speaker,
     _make_dynamic_selection,
     run_groupchat,
@@ -524,4 +527,217 @@ def test_dynamic_selection_last_round_always_facilitator() -> None:
     state = MagicMock()
     state.current_round = 12  # max_rounds - 1 = 12
     assert select(state) == "FacilitatorAgent"
+
+
+# ---------------------------------------------------------------------------
+# タイムアウト値・リトライ設定のテスト
+# ---------------------------------------------------------------------------
+
+
+def test_turn_timeout_is_adequate_for_ai_agents() -> None:
+    """ターンタイムアウトが AI エージェント接続に適した値（120秒以上）であること。"""
+    assert _TURN_TIMEOUT_SECONDS >= 120
+
+
+def test_max_retries_is_positive() -> None:
+    """最大リトライ回数が正の整数であること。"""
+    assert _MAX_RETRIES >= 1
+
+
+def test_retryable_exceptions_includes_connection_errors() -> None:
+    """リトライ対象に ConnectionError, TimeoutError, OSError が含まれること。"""
+    assert ConnectionError in _RETRYABLE_EXCEPTIONS
+    assert TimeoutError in _RETRYABLE_EXCEPTIONS
+    assert OSError in _RETRYABLE_EXCEPTIONS
+
+
+# ---------------------------------------------------------------------------
+# リトライロジックのテスト
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@patch("workflows.groupchat.create_critic_agent")
+@patch("workflows.groupchat.create_analyst_agent")
+@patch("workflows.groupchat.create_ceo_agent")
+@patch("workflows.groupchat.create_facilitator_agent")
+@patch("workflows.groupchat.GroupChatBuilder")
+async def test_groupchat_retries_on_connection_error(
+    mock_builder_cls: MagicMock,
+    mock_create_facilitator: MagicMock,
+    mock_create_ceo: MagicMock,
+    mock_create_analyst: MagicMock,
+    mock_create_critic: MagicMock,
+) -> None:
+    """ConnectionError 発生時にリトライし、成功すれば結果を返すこと。"""
+    mock_create_facilitator.return_value = MagicMock()
+    mock_create_ceo.return_value = MagicMock()
+    mock_create_analyst.return_value = MagicMock()
+    mock_create_critic.return_value = MagicMock()
+
+    # 1 回目は ConnectionError、2 回目は正常動作
+    fail_workflow = MagicMock()
+    fail_workflow.run = MagicMock(side_effect=ConnectionError("接続が切断されました"))
+    success_workflow = _make_mock_workflow()
+
+    mock_builder_cls.return_value.build.side_effect = [fail_workflow, success_workflow]
+
+    with patch("workflows.groupchat.asyncio.sleep", new_callable=AsyncMock):
+        result = await run_groupchat(topic="テスト", max_rounds=_DEFAULT_MAX_ROUNDS)
+
+    assert isinstance(result, GroupChatResult)
+    assert result.summary != ""
+
+
+@pytest.mark.asyncio
+@patch("workflows.groupchat.create_critic_agent")
+@patch("workflows.groupchat.create_analyst_agent")
+@patch("workflows.groupchat.create_ceo_agent")
+@patch("workflows.groupchat.create_facilitator_agent")
+@patch("workflows.groupchat.GroupChatBuilder")
+async def test_groupchat_retries_on_timeout_error(
+    mock_builder_cls: MagicMock,
+    mock_create_facilitator: MagicMock,
+    mock_create_ceo: MagicMock,
+    mock_create_analyst: MagicMock,
+    mock_create_critic: MagicMock,
+) -> None:
+    """TimeoutError 発生時にリトライし、成功すれば結果を返すこと。"""
+    mock_create_facilitator.return_value = MagicMock()
+    mock_create_ceo.return_value = MagicMock()
+    mock_create_analyst.return_value = MagicMock()
+    mock_create_critic.return_value = MagicMock()
+
+    fail_workflow = MagicMock()
+    fail_workflow.run = MagicMock(side_effect=TimeoutError("応答タイムアウト"))
+    success_workflow = _make_mock_workflow()
+
+    mock_builder_cls.return_value.build.side_effect = [fail_workflow, success_workflow]
+
+    with patch("workflows.groupchat.asyncio.sleep", new_callable=AsyncMock):
+        result = await run_groupchat(topic="テスト", max_rounds=_DEFAULT_MAX_ROUNDS)
+
+    assert isinstance(result, GroupChatResult)
+    assert result.summary != ""
+
+
+@pytest.mark.asyncio
+@patch("workflows.groupchat.create_critic_agent")
+@patch("workflows.groupchat.create_analyst_agent")
+@patch("workflows.groupchat.create_ceo_agent")
+@patch("workflows.groupchat.create_facilitator_agent")
+@patch("workflows.groupchat.GroupChatBuilder")
+async def test_groupchat_raises_after_max_retries_timeout(
+    mock_builder_cls: MagicMock,
+    mock_create_facilitator: MagicMock,
+    mock_create_ceo: MagicMock,
+    mock_create_analyst: MagicMock,
+    mock_create_critic: MagicMock,
+) -> None:
+    """TimeoutError が最大リトライ回数を超えた場合、詳細なエラーメッセージで RuntimeError を送出すること。"""
+    mock_create_facilitator.return_value = MagicMock()
+    mock_create_ceo.return_value = MagicMock()
+    mock_create_analyst.return_value = MagicMock()
+    mock_create_critic.return_value = MagicMock()
+
+    fail_workflow = MagicMock()
+    fail_workflow.run = MagicMock(side_effect=TimeoutError("応答タイムアウト"))
+    mock_builder_cls.return_value.build.return_value = fail_workflow
+
+    with patch("workflows.groupchat.asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(RuntimeError, match="タイムアウト") as exc_info:
+            await run_groupchat(topic="テスト", max_rounds=_DEFAULT_MAX_ROUNDS)
+
+    error_msg = str(exc_info.value)
+    assert "リトライ済み" in error_msg
+    assert "TimeoutError" in error_msg
+
+
+@pytest.mark.asyncio
+@patch("workflows.groupchat.create_critic_agent")
+@patch("workflows.groupchat.create_analyst_agent")
+@patch("workflows.groupchat.create_ceo_agent")
+@patch("workflows.groupchat.create_facilitator_agent")
+@patch("workflows.groupchat.GroupChatBuilder")
+async def test_groupchat_raises_after_max_retries_connection(
+    mock_builder_cls: MagicMock,
+    mock_create_facilitator: MagicMock,
+    mock_create_ceo: MagicMock,
+    mock_create_analyst: MagicMock,
+    mock_create_critic: MagicMock,
+) -> None:
+    """ConnectionError が最大リトライ回数を超えた場合、詳細なエラーメッセージで RuntimeError を送出すること。"""
+    mock_create_facilitator.return_value = MagicMock()
+    mock_create_ceo.return_value = MagicMock()
+    mock_create_analyst.return_value = MagicMock()
+    mock_create_critic.return_value = MagicMock()
+
+    fail_workflow = MagicMock()
+    fail_workflow.run = MagicMock(side_effect=ConnectionError("サーバーに接続できません"))
+    mock_builder_cls.return_value.build.return_value = fail_workflow
+
+    with patch("workflows.groupchat.asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(RuntimeError, match="通信エラー") as exc_info:
+            await run_groupchat(topic="テスト", max_rounds=_DEFAULT_MAX_ROUNDS)
+
+    error_msg = str(exc_info.value)
+    assert "リトライ済み" in error_msg
+    assert "ConnectionError" in error_msg
+
+
+@pytest.mark.asyncio
+@patch("workflows.groupchat.create_critic_agent")
+@patch("workflows.groupchat.create_analyst_agent")
+@patch("workflows.groupchat.create_ceo_agent")
+@patch("workflows.groupchat.create_facilitator_agent")
+@patch("workflows.groupchat.GroupChatBuilder")
+async def test_groupchat_no_retry_on_non_retryable_error(
+    mock_builder_cls: MagicMock,
+    mock_create_facilitator: MagicMock,
+    mock_create_ceo: MagicMock,
+    mock_create_analyst: MagicMock,
+    mock_create_critic: MagicMock,
+) -> None:
+    """リトライ対象外の例外（例: ValueError）はリトライせず即座に RuntimeError を送出すること。"""
+    mock_create_facilitator.return_value = MagicMock()
+    mock_create_ceo.return_value = MagicMock()
+    mock_create_analyst.return_value = MagicMock()
+    mock_create_critic.return_value = MagicMock()
+
+    fail_workflow = MagicMock()
+    fail_workflow.run = MagicMock(side_effect=ValueError("不正な入力"))
+    mock_builder_cls.return_value.build.return_value = fail_workflow
+
+    with pytest.raises(RuntimeError, match="エラーが発生しました") as exc_info:
+        await run_groupchat(topic="テスト", max_rounds=_DEFAULT_MAX_ROUNDS)
+
+    error_msg = str(exc_info.value)
+    assert "ValueError" in error_msg
+
+
+@pytest.mark.asyncio
+@patch("workflows.groupchat.create_critic_agent")
+@patch("workflows.groupchat.create_analyst_agent")
+@patch("workflows.groupchat.create_ceo_agent")
+@patch("workflows.groupchat.create_facilitator_agent")
+@patch("workflows.groupchat.GroupChatBuilder")
+async def test_groupchat_error_message_includes_exception_type(
+    mock_builder_cls: MagicMock,
+    mock_create_facilitator: MagicMock,
+    mock_create_ceo: MagicMock,
+    mock_create_analyst: MagicMock,
+    mock_create_critic: MagicMock,
+) -> None:
+    """エラーメッセージに例外クラス名が含まれること。"""
+    mock_create_facilitator.return_value = MagicMock()
+    mock_create_ceo.return_value = MagicMock()
+    mock_create_analyst.return_value = MagicMock()
+    mock_create_critic.return_value = MagicMock()
+
+    fail_workflow = MagicMock()
+    fail_workflow.run = MagicMock(side_effect=RuntimeError("内部エラー"))
+    mock_builder_cls.return_value.build.return_value = fail_workflow
+
+    with pytest.raises(RuntimeError, match=r"\[RuntimeError\]"):
+        await run_groupchat(topic="テスト", max_rounds=_DEFAULT_MAX_ROUNDS)
 
