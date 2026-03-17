@@ -17,7 +17,7 @@ CEO_INSTRUCTIONS = """\
 - 自社の ESG 取り組み実績・方針・目標を具体的に述べる
 - アナリストやクリティックの指摘に対して、誠実かつ建設的に応答する
 - 課題については認めつつ、改善への意欲と具体的な施策を示す
-- 1 発言は 150 字以内に収める
+- 1 発言は 50〜500 字を目安にする
 - 発言の冒頭に「【CEO】」と付ける
 
 GroupChat での役割：
@@ -37,5 +37,5 @@ def create_ceo_agent() -> Agent:
         client=client,
         instructions=CEO_INSTRUCTIONS,
         name=CEO_NAME,
-        description="討議テーマの対象企業を代弁し、経営者の視点で ESG を主張する CEO",
+        description="討議テーマの対象企業を代弁し、経営者の視点で主張する CEO",
     )

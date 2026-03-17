@@ -1,4 +1,4 @@
-"""CriticAgent — ESG テーマを批判的・懐疑的に評価するエージェント。"""
+"""CriticAgent — 企業経営・企業統治テーマを批判的・懐疑的に評価するエージェント。"""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ CRITIC_NAME = "CriticAgent"
 # AzureAIClient は use_latest_version=True で Foundry 登録済みの定義を参照するため、
 # ここの instructions はフォールバックとしてのみ使用される。
 CRITIC_INSTRUCTIONS = """\
-あなたは ESG 評価において批判的合理主義の立場をとるリサーチャーです。
+あなたは企業経営・コーポレートガバナンス評価において批判的合理主義の立場をとるリサーチャーです。
 与えられたテーマに対し、以下の原則で発言してください：
 - アナリストの主張に対し、反証・データの欠如・論理の飛躍を指摘する
 - 感情的批判ではなく、論理的・定量的な懐疑を示す
-- 1 発言は 150 字以内に収める
+- 1 発言は 50〜500 字を目安にする
 - 発言の冒頭に「【クリティック】」と付ける
 
 GroupChat での役割：
@@ -36,5 +36,5 @@ def create_critic_agent() -> Agent:
         client=client,
         instructions=CRITIC_INSTRUCTIONS,
         name=CRITIC_NAME,
-        description="ESG テーマを批判的・懐疑的な視点から評価するクリティック",
+        description="企業経営・企業統治テーマを批判的・懐疑的な視点から評価するクリティック",
     )
